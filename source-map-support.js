@@ -4,25 +4,57 @@ var fs = require('fs');
 
 function mapSourcePosition(cache, position) {
   var sourceMap = cache[position.source];
+
   if (!sourceMap && fs.existsSync(position.source)) {
     // Get the URL of the source map
-    var fileData = fs.readFileSync(position.source, 'utf8');
-    var match = /\/\/@\s*sourceMappingURL=(.*)\s*$/m.exec(fileData);
-    if (!match) return position;
-    var sourceMappingURL = match[1];
+    var sourceMappingInfo;
+    var sourceMapData;
 
-    // Support source map URLs relative to the source URL
-    var dir = path.dirname(position.source);
-    sourceMappingURL = path.resolve(dir, sourceMappingURL);
+    if( global.sourceMaps ) {
+      sourceMappingInfo = global.sourceMaps[position.source];      
+    }
 
+    if( sourceMappingInfo ) {
+      sourceMapData = sourceMappingInfo.map;
+    }
+
+    if( !sourceMapData ) {
+        var fileData = fs.readFileSync(position.source, 'utf8');
+        var match = /\/\/@\s*sourceMappingURL=(.*)\s*$/m.exec(fileData);
+        var sourceMappingURL;
+        
+        if(match)
+        {
+          sourceMappingURL = match[1];
+        }
+        else
+        {
+          sourceMappingURL = position.source + ".map"
+        } 
+
+        if (!sourceMappingURL) return position;
+
+
+        // Support source map URLs relative to the source URL
+        var dir = path.dirname(position.source);
+        sourceMappingURL = path.resolve(dir, sourceMappingURL);
+
+        if (fs.existsSync(sourceMappingURL)) {
+          sourceMapData = fs.readFileSync(sourceMappingURL, 'utf8');
+        }
+    }
+    
+    if (sourceMapData) {
     // Parse the source map
-    if (fs.existsSync(sourceMappingURL)) {
-      var sourceMapData = fs.readFileSync(sourceMappingURL, 'utf8');
       try {
         sourceMap = new SourceMapConsumer(sourceMapData);
         cache[position.source] = sourceMap;
       } catch (e) {
+        return position;
       }
+    }
+    else {
+      return position;
     }
   }
   return sourceMap ? sourceMap.originalPositionFor(position) : position;
@@ -72,7 +104,7 @@ function wrapCallSite(cache, frame) {
       getScriptNameOrSourceURL: function() { return position.source; }
     };
   }
-
+  return frame;
   // Code called using eval() needs special handling
   var origin = frame.getEvalOrigin();
   if (origin) {
@@ -100,7 +132,8 @@ function prepareStackTrace(error, stack) {
 }
 
 // Mimic node's stack trace printing when an exception escapes the process
-function handleUncaughtExceptions(error) {
+module.exports.printError = printError = function(error) {
+  //console.log("EXCEPTION")
   if (!error || !error.stack) {
     console.log('Uncaught exception:', error);
     process.exit();
@@ -113,6 +146,7 @@ function handleUncaughtExceptions(error) {
       line: match[2],
       column: match[3]
     });
+    position = {source:match[1], line:match[2], column: match[3]}
     if (fs.existsSync(position.source)) {
       var contents = fs.readFileSync(position.source, 'utf8');
       var line = contents.split(/(?:\r\n|\r|\n)/)[position.line - 1];
@@ -124,8 +158,15 @@ function handleUncaughtExceptions(error) {
     }
   }
   console.log(error.stack);
-  process.exit();
 }
+
+var handleUncaughtExceptions = function(error)
+{
+  console.log("Uncaught Exception");
+  printError(error);
+  process.exit(1);  
+}
+
 
 exports.install = function(options) {
   Error.prepareStackTrace = prepareStackTrace;
@@ -145,4 +186,6 @@ exports.install = function(options) {
   if (installHandler) {
     process.on('uncaughtException', handleUncaughtExceptions);
   }
+
+  return exports;
 };
